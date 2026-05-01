@@ -37,7 +37,6 @@ real-time visuals.
 ## Quick Start
 
 ```bash
-cd /home/mtsu/projects/twingalaxynet
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[fast-display]"
@@ -47,7 +46,6 @@ twingalaxynet --display opencv
 Without installing the package:
 
 ```bash
-cd /home/mtsu/projects/twingalaxynet
 PYTHONPATH=src python3 -m twingalaxynet --display opencv
 ```
 
