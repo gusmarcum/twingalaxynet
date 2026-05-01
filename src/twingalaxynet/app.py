@@ -79,11 +79,11 @@ class GalaxyApp:
                 0.52 if self.args.impact_parameter is None else self.args.impact_parameter
             ),
             approach_speed=(
-                (0.095 if self.args.mode == "planet" else 0.090)
+                (0.065 if self.args.mode == "planet" else 0.090)
                 if self.args.impact_speed is None
                 else self.args.impact_speed
             ),
-            gravity_strength=0.0010 if self.args.mode == "planet" else 0.00055,
+            gravity_strength=0.0025 if self.args.mode == "planet" else 0.00055,
             spring_strength=0.115 if self.args.mode == "planet" else 0.060,
             shock_strength=0.54 if self.args.mode == "planet" else 0.34,
             runaway_speed=3.0 if self.args.mode == "planet" else 2.4,
@@ -95,7 +95,9 @@ class GalaxyApp:
 
         if self.args.mode == "galaxy":
             return 72.0
-        return 4.6
+        if self.args.mode == "planet":
+            return 7.2
+        return 6.8
 
     def _default_collider_dt(self) -> float:
         """Return mode-specific collider time step."""

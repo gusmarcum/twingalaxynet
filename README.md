@@ -23,7 +23,8 @@ real-time visuals.
   such as Toomre & Toomre (1972).
 - Planet and star modes are deformable tracer-particle visual models, not full
   SPH or radiation-hydrodynamic solvers. They include center gravity, elastic
-  restoring forces, impact heating, and debris/plasma plumes.
+  restoring forces, inelastic contact impulses, impact heating, and
+  debris/plasma plumes.
 - The galaxy integrator uses a kick-drift-kick leapfrog scheme. Collider modes
   use semi-implicit particle updates for stable real-time visuals.
 - Galaxy state uses `float64` by default because kpc/Myr dynamics spans large
@@ -81,6 +82,7 @@ PYTHONPATH=src python3 -m twingalaxynet \
   --mode planet \
   --impact-speed 0.16 \
   --body-offset 1.7 \
+  --extent 7.2 \
   --particles 70000
 ```
 
@@ -146,6 +148,14 @@ Matplotlib fallback with `--display matplotlib`:
 - `Q`: quit
 
 ## Visual Themes
+
+Planet/star mode knobs:
+
+- `--impact-speed`: approach speed in body radii per time unit.
+- `--impact-parameter`: off-center collision offset in body radii.
+- `--body-offset`: initial center offset in body radii.
+- `--extent`: visible half-width. Planet mode defaults to a wider `7.2`
+  Earth-radius view so ejecta and post-impact motion stay in frame.
 
 - `natural`: balanced optical look with blue young stars and warm older stars.
 - `hubble`: high-contrast optical palette.

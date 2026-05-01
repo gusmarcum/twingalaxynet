@@ -37,12 +37,15 @@ class ColliderConfig:
     radius: float = 1.0
     center_offset: float = 2.45
     impact_parameter: float = 0.52
-    approach_speed: float = 0.095
+    approach_speed: float = 0.065
     spin_rate: float = 0.020
-    gravity_strength: float = 0.0009
+    gravity_strength: float = 0.0025
     spring_strength: float = 0.10
     damping: float = 0.06
     shock_strength: float = 0.46
+    contact_restitution: float = 0.0
+    contact_friction: float = 0.48
+    contact_floor: float = 1.38
     heat_decay: float = 0.985
     dtype: torch.dtype = torch.float32
     seed: int = 19
@@ -176,6 +179,7 @@ class BodyCollisionSimulation:
             center_acc = self._center_acceleration()
             self.center_velocity = self.center_velocity + dt * center_acc
             self.center_position = self.center_position + dt * self.center_velocity
+            self._resolve_center_contact()
             shock = self.impact_strength()
 
             for shard in self.shards:
@@ -283,11 +287,64 @@ class BodyCollisionSimulation:
         direction = delta / radius
         gravity = self.config.gravity_strength / radius**2
         overlap = torch.clamp(2.0 * self.config.radius - radius, min=0.0)
-        contact = 0.020 * overlap if self.config.kind == "planet" else 0.006 * overlap
+        contact = 0.022 * overlap if self.config.kind == "planet" else 0.006 * overlap
         acc = torch.zeros_like(self.center_position)
         acc[0] = -gravity * direction + contact * direction
         acc[1] = gravity * direction - contact * direction
         return acc
+
+    def _resolve_center_contact(self) -> None:
+        """Apply an equal-mass inelastic contact impulse to overlapping bodies.
+
+        This is not a rigid-body solver. It is a conservative correction that
+        prevents planet cores from numerically passing through each other while
+        still allowing deformation, heating, and debris ejection.
+        """
+
+        delta = self.center_position[1] - self.center_position[0]
+        separation = torch.clamp(torch.linalg.norm(delta), min=1e-6)
+        normal = delta / separation
+        overlap = 2.0 * self.config.radius - separation
+        if overlap <= 0.0:
+            return
+
+        contact_trigger = (
+            1.62 * self.config.radius
+            if self.config.kind == "planet"
+            else 1.88 * self.config.radius
+        )
+        if separation > contact_trigger:
+            return
+
+        if self.config.kind == "planet":
+            floor = self.config.contact_floor * self.config.radius
+            correction = torch.clamp(floor - separation, min=0.0)
+            self.center_position[0] -= 0.5 * correction * normal
+            self.center_position[1] += 0.5 * correction * normal
+
+        relative_velocity = self.center_velocity[1] - self.center_velocity[0]
+        normal_speed = torch.sum(relative_velocity * normal)
+        if normal_speed < 0.0:
+            restitution = (
+                self.config.contact_restitution
+                if self.config.kind == "planet"
+                else 0.0
+            )
+            impulse = -0.5 * (1.0 + restitution) * normal_speed * normal
+            self.center_velocity[0] -= impulse
+            self.center_velocity[1] += impulse
+
+        relative_velocity = self.center_velocity[1] - self.center_velocity[0]
+        tangent = relative_velocity - torch.sum(relative_velocity * normal) * normal
+        friction = self.config.contact_friction if self.config.kind == "planet" else 0.18
+        self.center_velocity[0] += 0.5 * friction * tangent
+        self.center_velocity[1] -= 0.5 * friction * tangent
+
+        barycentric_velocity = torch.mean(self.center_velocity, dim=0, keepdim=True)
+        impact_damping = 0.18 if self.config.kind == "planet" else 0.04
+        self.center_velocity = barycentric_velocity + (
+            self.center_velocity - barycentric_velocity
+        ) * (1.0 - impact_damping * self.impact_strength())
 
     def _particle_acceleration(
         self,
@@ -302,6 +359,7 @@ class BodyCollisionSimulation:
         spring = self.config.spring_strength * (1.0 - 0.72 * shock)
         acceleration = spring * (target - shard.position)
         acceleration += self.config.damping * (body_velocity - shard.velocity)
+        acceleration += self._center_gravity(shard.position, centers)
 
         mid = torch.mean(centers, dim=0)
         axis = centers[1] - centers[0]
@@ -321,7 +379,9 @@ class BodyCollisionSimulation:
         )
         turbulence = torch.sin(7.0 * shard.anchor[:, 0:1] + 5.0 * self.time)
         shock_acc = self.config.shock_strength * shock * contact_weight[:, None]
-        acceleration += shock_acc * (0.95 * radial + 0.22 * turbulence * plume)
+        radial_push = 0.55 if self.config.kind == "planet" else 0.95
+        swirl_push = 0.16 if self.config.kind == "planet" else 0.22
+        acceleration += shock_acc * (radial_push * radial + swirl_push * turbulence * plume)
         if self.config.kind == "star":
             acceleration += 0.24 * shock_acc * axis[None, :] * torch.sign(
                 torch.sum(from_mid * axis[None, :], dim=1, keepdim=True)
@@ -330,6 +390,22 @@ class BodyCollisionSimulation:
         heat_source = (0.18 if self.config.kind == "planet" else 0.32) * shock
         heat_source = heat_source * contact_weight.to(torch.float32)
         return acceleration, heat_source
+
+    def _center_gravity(
+        self,
+        position: torch.Tensor,
+        centers: torch.Tensor,
+    ) -> torch.Tensor:
+        """Apply softened gravity from both body centers to tracer particles."""
+
+        softening = 0.34 if self.config.kind == "planet" else 0.55
+        delta = centers[None, :, :] - position[:, None, :]
+        radius2 = torch.sum(delta * delta, dim=2) + softening**2
+        inv_radius3 = torch.rsqrt(radius2) ** 3
+        strength = self.config.gravity_strength * (
+            0.55 if self.config.kind == "planet" else 0.38
+        )
+        return strength * torch.sum(delta * inv_radius3[:, :, None], dim=1)
 
     def _assert_physical(self) -> None:
         if not torch.isfinite(self.center_position).all():

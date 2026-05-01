@@ -69,11 +69,11 @@ def make_planet() -> None:
         ),
         devices="auto",
     )
-    sim.step(34)
+    sim.step(40)
     frame = make_frame_from_collider(
         sim,
         resolution=720,
-        extent=4.1,
+        extent=6.2,
         yaw_deg=-12.0,
         pitch_deg=18.0,
         bloom=True,
