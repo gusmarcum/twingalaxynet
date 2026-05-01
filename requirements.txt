@@ -1,0 +1,4 @@
+astropy>=5
+matplotlib>=3.5
+numpy>=1.22
+torch>=2

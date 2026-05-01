@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "twingalaxynet"
+version = "0.1.0"
+description = "A GPU-accelerated twin galaxy collision simulator with cinematic visuals."
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [{name = "TwinGalaxyNET contributors"}]
+dependencies = [
+    "astropy>=5",
+    "matplotlib>=3.5",
+    "numpy>=1.22",
+    "torch>=2",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.4"]
+fast-display = ["opencv-python>=4"]
+
+[project.scripts]
+twingalaxynet = "twingalaxynet.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py38"
