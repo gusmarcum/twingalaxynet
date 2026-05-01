@@ -73,7 +73,7 @@ def make_planet() -> None:
     frame = make_frame_from_collider(
         sim,
         resolution=720,
-        extent=6.2,
+        extent=8.5,
         yaw_deg=-12.0,
         pitch_deg=18.0,
         bloom=True,

@@ -46,6 +46,8 @@ class ColliderConfig:
     contact_restitution: float = 0.0
     contact_friction: float = 0.48
     contact_floor: float = 1.38
+    damage_rate: float = 0.22
+    debris_ejecta: float = 1.15
     heat_decay: float = 0.985
     dtype: torch.dtype = torch.float32
     seed: int = 19
@@ -84,6 +86,7 @@ class ColliderShard:
     color: torch.Tensor
     luminosity: torch.Tensor
     heat: torch.Tensor
+    damage: torch.Tensor
 
 
 class BodyCollisionSimulation:
@@ -98,6 +101,8 @@ class BodyCollisionSimulation:
         self.devices = self._select_devices(devices)
         self._validate_config()
         self.time = 0.0
+        self.peak_impact = 0.0
+        self.disruption_started = False
         self.center_position: torch.Tensor
         self.center_velocity: torch.Tensor
         self.shards: List[ColliderShard] = []
@@ -163,10 +168,13 @@ class BodyCollisionSimulation:
                         luminosity, dtype=torch.float32, device=device
                     ),
                     heat=torch.zeros(count, dtype=torch.float32, device=device),
+                    damage=torch.zeros(count, dtype=torch.float32, device=device),
                 )
             )
             start += count
         self.time = 0.0
+        self.peak_impact = 0.0
+        self.disruption_started = False
         self._assert_physical()
 
     def step(self, count: int = 1) -> None:
@@ -181,9 +189,14 @@ class BodyCollisionSimulation:
             self.center_position = self.center_position + dt * self.center_velocity
             self._resolve_center_contact()
             shock = self.impact_strength()
+            if self.config.kind == "planet":
+                shock_value = float(shock.detach().to("cpu"))
+                self.peak_impact = max(self.peak_impact, shock_value)
+                if self.peak_impact >= 0.22:
+                    self.disruption_started = True
 
             for shard in self.shards:
-                acceleration, heat_source = self._particle_acceleration(
+                acceleration, heat_source, damage_source = self._particle_acceleration(
                     shard,
                     shock.to(shard.device),
                 )
@@ -193,6 +206,11 @@ class BodyCollisionSimulation:
                     shard.heat * self.config.heat_decay + heat_source,
                     0.0,
                     8.0,
+                )
+                shard.damage = torch.clamp(
+                    shard.damage + damage_source,
+                    0.0,
+                    1.0,
                 )
             self.time += dt
         self._assert_physical()
@@ -350,16 +368,27 @@ class BodyCollisionSimulation:
         self,
         shard: ColliderShard,
         shock: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         centers = self.center_position.to(shard.device, self.config.dtype)
         velocities = self.center_velocity.to(shard.device, self.config.dtype)
         body_center = centers[shard.body_id]
         body_velocity = velocities[shard.body_id]
-        target = body_center + shard.anchor * (1.0 + 0.10 * shock)
-        spring = self.config.spring_strength * (1.0 - 0.72 * shock)
-        acceleration = spring * (target - shard.position)
-        acceleration += self.config.damping * (body_velocity - shard.velocity)
-        acceleration += self._center_gravity(shard.position, centers)
+        damage = shard.damage.to(self.config.dtype)
+        intact = torch.clamp(1.0 - damage, 0.0, 1.0)
+        target = body_center + shard.anchor * (1.0 + 0.06 * shock * intact[:, None])
+        if self.config.kind == "planet" and self.disruption_started:
+            spring = self.config.spring_strength * intact**2
+        else:
+            spring = self.config.spring_strength * (0.08 + 0.92 * intact**2)
+        spring = spring * (1.0 - 0.55 * shock)
+        acceleration = spring[:, None] * (target - shard.position)
+        acceleration += self.config.damping * intact[:, None] * (
+            body_velocity - shard.velocity
+        )
+        center_gravity = self._center_gravity(shard.position, centers)
+        if self.config.kind == "planet" and self.disruption_started:
+            center_gravity = center_gravity * torch.clamp(intact[:, None] ** 2, 0.03, 1.0)
+        acceleration += center_gravity
 
         mid = torch.mean(centers, dim=0)
         axis = centers[1] - centers[0]
@@ -378,10 +407,56 @@ class BodyCollisionSimulation:
             dim=1,
         )
         turbulence = torch.sin(7.0 * shard.anchor[:, 0:1] + 5.0 * self.time)
+        surface = torch.clamp(
+            torch.linalg.norm(shard.anchor, dim=1) / self.config.radius,
+            0.0,
+            1.0,
+        )
+        weakness = 0.25 + 0.75 * surface
+        if self.config.kind == "planet":
+            damage_source = (
+                self.config.damage_rate
+                * shock
+                * contact_weight.to(torch.float32)
+                * weakness.to(torch.float32)
+            )
+            if self.disruption_started:
+                damage_source = damage_source + 0.010 * weakness.to(torch.float32)
+        else:
+            damage_source = 0.08 * shock * contact_weight.to(torch.float32)
+
+        debris_gate = torch.clamp(damage + damage_source.to(damage.dtype), 0.0, 1.0)
+        debris_gate = debris_gate[:, None]
         shock_acc = self.config.shock_strength * shock * contact_weight[:, None]
-        radial_push = 0.55 if self.config.kind == "planet" else 0.95
-        swirl_push = 0.16 if self.config.kind == "planet" else 0.22
+        radial_push = 0.42 if self.config.kind == "planet" else 0.95
+        swirl_push = 0.22 if self.config.kind == "planet" else 0.22
         acceleration += shock_acc * (radial_push * radial + swirl_push * turbulence * plume)
+        if self.config.kind == "planet":
+            disruption_boost = 1.65 if self.disruption_started else 1.0
+            ejecta = (
+                disruption_boost
+                * self.config.debris_ejecta
+                * shock
+                * contact_weight[:, None]
+            )
+            side = torch.sign(torch.sum(from_mid * axis[None, :], dim=1, keepdim=True))
+            chaos = torch.stack(
+                [
+                    torch.sin(13.0 * shard.anchor[:, 1] + 0.7),
+                    torch.cos(17.0 * shard.anchor[:, 2] - 0.4),
+                    torch.sin(11.0 * (shard.anchor[:, 0] + shard.anchor[:, 1])),
+                ],
+                dim=1,
+            )
+            chaos = torch.nn.functional.normalize(chaos, dim=1)
+            sheet_direction = torch.nn.functional.normalize(
+                0.50 * radial
+                + 0.35 * side * axis[None, :]
+                + 0.45 * turbulence * plume
+                + 0.32 * chaos,
+                dim=1,
+            )
+            acceleration += ejecta * debris_gate * sheet_direction
         if self.config.kind == "star":
             acceleration += 0.24 * shock_acc * axis[None, :] * torch.sign(
                 torch.sum(from_mid * axis[None, :], dim=1, keepdim=True)
@@ -389,7 +464,7 @@ class BodyCollisionSimulation:
 
         heat_source = (0.18 if self.config.kind == "planet" else 0.32) * shock
         heat_source = heat_source * contact_weight.to(torch.float32)
-        return acceleration, heat_source
+        return acceleration, heat_source, damage_source
 
     def _center_gravity(
         self,

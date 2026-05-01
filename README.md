@@ -23,8 +23,11 @@ real-time visuals.
   such as Toomre & Toomre (1972).
 - Planet and star modes are deformable tracer-particle visual models, not full
   SPH or radiation-hydrodynamic solvers. They include center gravity, elastic
-  restoring forces, inelastic contact impulses, impact heating, and
-  debris/plasma plumes.
+  restoring forces, inelastic contact impulses, impact damage, ejecta, heating,
+  and debris/plasma plumes.
+- Planet mode switches damaged impact-zone material into a disruption/ejecta
+  state after peak compression, reducing its original-body spring binding and
+  center gravity so fragments disperse instead of oscillating like elastic gel.
 - The galaxy integrator uses a kick-drift-kick leapfrog scheme. Collider modes
   use semi-implicit particle updates for stable real-time visuals.
 - Galaxy state uses `float64` by default because kpc/Myr dynamics spans large
@@ -152,7 +155,7 @@ Planet/star mode knobs:
 - `--impact-speed`: approach speed in body radii per time unit.
 - `--impact-parameter`: off-center collision offset in body radii.
 - `--body-offset`: initial center offset in body radii.
-- `--extent`: visible half-width. Planet mode defaults to a wider `7.2`
+- `--extent`: visible half-width. Planet mode defaults to a wider `9.5`
   Earth-radius view so ejecta and post-impact motion stay in frame.
 
 - `natural`: balanced optical look with blue young stars and warm older stars.

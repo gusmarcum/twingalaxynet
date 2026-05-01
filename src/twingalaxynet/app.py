@@ -96,7 +96,7 @@ class GalaxyApp:
         if self.args.mode == "galaxy":
             return 72.0
         if self.args.mode == "planet":
-            return 7.2
+            return 9.5
         return 6.8
 
     def _default_collider_dt(self) -> float:
@@ -147,6 +147,7 @@ class GalaxyApp:
 
         cv2.namedWindow("TwinGalaxyNET", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("TwinGalaxyNET", self.args.resolution, self.args.resolution)
+        cv2.setMouseCallback("TwinGalaxyNET", self.handle_opencv_mouse)
 
     def on_key(self, event) -> None:  # noqa: ANN001
         """Handle keyboard input from Matplotlib."""
@@ -161,10 +162,10 @@ class GalaxyApp:
             self.yaw -= 5.0
         elif event.key == "right":
             self.yaw += 5.0
-        elif event.key == "[":
-            self.extent = min(self.extent * 1.12, 180.0)
-        elif event.key == "]":
-            self.extent = max(self.extent / 1.12, 24.0)
+        elif event.key in ("[", "-", "_", "o"):
+            self.zoom_out()
+        elif event.key in ("]", "+", "=", "i"):
+            self.zoom_in()
         elif event.key == "s":
             self.save_frame()
         elif event.key == "t":
@@ -237,7 +238,7 @@ class GalaxyApp:
         devices = ", ".join(str(device) for device in self.simulation.devices)
         state = "paused" if self.paused else "running"
         controls = (
-            "Space pause | W/S speed | A/D camera | T theme | C camera | P save | Q quit"
+            "Space pause | W/S speed | A/D camera | +/- zoom | wheel zoom | P save | Q quit"
             if self.display == "opencv"
             else "Space pause | arrows speed/camera | T theme | C camera | S save | Q quit"
         )
@@ -316,10 +317,10 @@ class GalaxyApp:
             self.yaw -= 5.0
         elif key in (83, ord("d")):
             self.yaw += 5.0
-        elif key == ord("["):
-            self.extent = min(self.extent * 1.12, 180.0)
-        elif key == ord("]"):
-            self.extent = max(self.extent / 1.12, 24.0)
+        elif key in (ord("["), ord("-"), ord("_"), ord("o")):
+            self.zoom_out()
+        elif key in (ord("]"), ord("+"), ord("="), ord("i")):
+            self.zoom_in()
         elif key == ord("p"):
             self.save_frame()
         elif key == ord("t"):
@@ -330,6 +331,46 @@ class GalaxyApp:
         elif key == ord("r"):
             self.simulation.reset()
         return False
+
+    def handle_opencv_mouse(self, event: int, _x: int, _y: int, flags: int, _param) -> None:
+        """Handle OpenCV mouse-wheel zoom."""
+
+        import cv2
+
+        if event != cv2.EVENT_MOUSEWHEEL:
+            return
+        if flags > 0:
+            self.zoom_in()
+        else:
+            self.zoom_out()
+
+    def zoom_in(self) -> None:
+        """Decrease visible half-width."""
+
+        self.extent = max(self.extent / 1.15, self._minimum_extent())
+
+    def zoom_out(self) -> None:
+        """Increase visible half-width."""
+
+        self.extent = min(self.extent * 1.15, self._maximum_extent())
+
+    def _minimum_extent(self) -> float:
+        """Return mode-specific minimum visible half-width."""
+
+        if self.args.mode == "galaxy":
+            return 18.0
+        if self.args.mode == "planet":
+            return 1.8
+        return 2.2
+
+    def _maximum_extent(self) -> float:
+        """Return mode-specific maximum visible half-width."""
+
+        if self.args.mode == "galaxy":
+            return 220.0
+        if self.args.mode == "planet":
+            return 24.0
+        return 18.0
 
     def render_frame(self) -> np.ndarray:
         """Render the current simulation frame."""
